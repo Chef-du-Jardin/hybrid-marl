@@ -43,8 +43,10 @@ def run(_run, _config, _log):
     try:
         map_name = _config["env_args"]["map_name"]
     except:
-        map_name = _config["env_args"]["key"]   
-    unique_token = f"{_config['name']}_seed{_config['seed']}_{map_name}_{datetime.datetime.now()}"
+        map_name = _config["env_args"]["key"]
+    
+    obs_level = _config.get("perception_args", {}).get("model_type", "full_obs")
+    unique_token = f"{_config['name']}_{obs_level}_seed{_config['seed']}_{map_name}_{datetime.datetime.now()}"
     logger.console_logger.info("Experiment token ID: {}".format(unique_token))
 
     args.unique_token = unique_token
@@ -58,11 +60,20 @@ def run(_run, _config, _log):
     # sacred is on by default
     logger.setup_sacred(_run)
 
+    detailed_log_dir = os.path.join(
+        dirname(dirname(abspath(__file__))), "results", "detailed_logs"
+    )
+    logger.setup_detailed_log(detailed_log_dir, unique_token)
+    logger.setup_json_log(detailed_log_dir, unique_token, _config)
+    logger.log_to_file(f"Starting experiment: {unique_token}")
+    logger.log_to_file(f"Configuration: {_config['name']}, seed={_config['seed']}, env={map_name}")
+
     # Run and train
     run_sequential(args=args, logger=logger)
 
     # Clean up after finishing
     print("Exiting Main")
+    logger.close_detailed_log()
 
     print("Stopping all threads")
     for t in threading.enumerate():
@@ -330,6 +341,9 @@ def run_sequential(args, logger):
                     time_str(time.time() - start_time),
                 )
             )
+            logger.log_to_file(f"Progress: {runner.t_env}/{args.t_max} ({100*runner.t_env/args.t_max:.1f}%)", runner.t_env)
+            logger.log_to_file(f"Time passed: {time_str(time.time() - start_time)}", runner.t_env)
+            logger.log_to_file(f"Estimated time left: {time_left(last_time, last_test_T, runner.t_env, args.t_max)}", runner.t_env)
             last_time = time.time()
 
             last_test_T = runner.t_env
@@ -355,10 +369,12 @@ def run_sequential(args, logger):
             # "results/models/{}".format(unique_token)
             os.makedirs(save_path, exist_ok=True)
             logger.console_logger.info("Saving models to {}".format(save_path))
+            logger.log_to_file(f"Saving Models to {save_path}", runner.t_env)
 
             # learner should handle saving/loading -- delegate actor save/load to mac,
             # use appropriate filenames to do critics, optimizer states
             learner.save_models(save_path, save_mongo=True)
+            logger.log_to_file(f"Models saved successfully", runner.t_env)
 
         if args.perception_args["perception"] and perc_model.is_trainable and \
             args.perception_args["save_model"] and (
@@ -384,6 +400,11 @@ def run_sequential(args, logger):
 
     runner.close_env()
     logger.console_logger.info("Finished Training")
+    logger.log_to_file("="*60)
+    logger.log_to_file("COMPLETED")
+    logger.log_to_file(f"Total timesteps: {runner.t_env}")
+    logger.log_to_file(f"Total episodes: {episode}")
+    logger.log_to_file("="*60)
 
 
 def args_sanity_check(config, _log):
